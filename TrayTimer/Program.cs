@@ -13,52 +13,59 @@ namespace TrayTimer
         {
             private static volatile Chronometer instance;
             private static object syncRoot = new Object();
+            enum stateType { IDLE, RUNNING, PAUSED };
 
-            private System.Timers.Timer timer = new System.Timers.Timer();
-            private System.Timers.Timer updateTimer = new System.Timers.Timer();
+            private System.Timers.Timer timer;
+            private System.Timers.Timer updateTimer;
+
             private DateTime targetTime = DateTime.Now;
-
             public NotifyIcon notifyIcon;
 
-            public void AddToTimer(int minutes)
-            {
-                if (minutes < 0) return;
+            private stateType State { get; set; }
 
+            private int pauseRemainingMilliseconds;
+
+            public Chronometer() => State = stateType.IDLE;
+
+            public void AddMilliseconds(int milliseconds)
+            {
+                if (milliseconds <= 0) return;
+                timer = new System.Timers.Timer();
                 timer.Elapsed += new System.Timers.ElapsedEventHandler(Timer_Ended);
-                timer.Interval = minutes * 60 * 1000;
+                targetTime = DateTime.Now.AddMilliseconds(milliseconds);
+                timer.Interval = milliseconds;
                 timer.AutoReset = false;
-                targetTime = DateTime.Now.AddMinutes(minutes);
                 timer.Start();
 
-                // check the +=
+                updateTimer = new System.Timers.Timer();
                 updateTimer.Elapsed += new System.Timers.ElapsedEventHandler(Update_Tick);
                 updateTimer.Interval = 1000;
                 updateTimer.AutoReset = true;
                 updateTimer.Start();
 
-                UpdateNotification();
+                State = stateType.RUNNING;
+                UpdateTray();
             }
 
-            private static void Update_Tick(object source, System.Timers.ElapsedEventArgs e)
-            {
-                Chronometer.instance.UpdateNotification();
-            }
+            public void AddMinutes(int minutes) => AddMilliseconds(minutes * 60 * 1000);
+
+            private static void Update_Tick(object source, System.Timers.ElapsedEventArgs e) => Chronometer.instance.UpdateTray();
 
             private static void Timer_Ended(object source, System.Timers.ElapsedEventArgs e)
             {
-                Chronometer.instance.updateTimer.AutoReset = false;
-                Chronometer.instance.updateTimer.Stop();
-
-                Chronometer.instance.UpdateNotification();
+                Chronometer.instance.Stop();
                 System.Windows.Forms.MessageBox.Show("Time's up!", "TrayTimer");
             }
 
-            public string getStateName()
+            public string GetTimeRemaining() => Math.Truncate((DateTime.Now - targetTime).TotalMinutes * -1).ToString();
+
+            public string GetStateName()
             {
-                TimeSpan t = DateTime.Now - targetTime;
-                if(t.TotalMinutes < 0)
-                {
-                    return Math.Truncate(t.TotalMinutes * -1).ToString() + " minutes remaining";
+                switch (State) {
+                    case stateType.RUNNING:
+                        return GetTimeRemaining() + " minutes remaining"; ;
+                    case stateType.PAUSED:
+                        return "[Paused] "+ GetTimeRemaining() + " minutes remaining";
                 }
                 return "Idle";
             }
@@ -66,24 +73,34 @@ namespace TrayTimer
             private ContextMenuStrip GetContext()
             {
                 ContextMenuStrip CMS = new ContextMenuStrip();
-                CMS.Items.Add(new ToolStripLabel(getStateName()));
+                CMS.Items.Add(new ToolStripLabel(GetStateName()));
                 CMS.Items.Add(new ToolStripSeparator());
-                CMS.Items.Add("25 minutes", null, new EventHandler(Timer_Click));
-                CMS.Items.Add("15 minutes", null, new EventHandler(Timer_Click));
-                CMS.Items.Add("5 minutes", null, new EventHandler(Timer_Click));
-                //CMS.Items.Add("Custom time...", null, new EventHandler(Timer_Click));
-                //CMS.Items.Add(new ToolStripSeparator());
-                //CMS.Items.Add("Settings...", null, new EventHandler(Exit_Click));
+                if (State == stateType.IDLE)
+                {
+                    CMS.Items.Add("25 minutes", null, new EventHandler(Timer_Click));
+                    CMS.Items.Add("15 minutes", null, new EventHandler(Timer_Click));
+                    CMS.Items.Add("5 minutes", null, new EventHandler(Timer_Click));
+                }
+                else if (State == stateType.RUNNING)
+                {
+                    CMS.Items.Add("Stop", null, new EventHandler(Stop_Click));
+                    CMS.Items.Add("Pause", null, new EventHandler(Pause_Click));
+                    CMS.Items.Add("5 more minutes", null, new EventHandler(Timer_Click));
+                }
+                else // pause
+                {
+                    CMS.Items.Add("Resume", null, new EventHandler(Pause_Click));
+                }
                 CMS.Items.Add(new ToolStripSeparator());
                 CMS.Items.Add("Exit", null, new EventHandler(Exit_Click));
                 return CMS;
             }
 
-            public void UpdateNotification()
+            public void UpdateTray()
             {
                 notifyIcon.ContextMenuStrip = GetContext();
                 notifyIcon.Icon = new System.Drawing.Icon("1.ico");
-                notifyIcon.Text = "Tray Timer ("+ getStateName() + ")";
+                notifyIcon.Text = "Tray Timer ("+ GetStateName() + ")";
                 notifyIcon.Visible = true;
             }
 
@@ -102,6 +119,34 @@ namespace TrayTimer
                     return instance;
                 }
             }
+
+            public void Stop()
+            {
+                timer.AutoReset = false;
+                timer.Stop();
+                updateTimer.AutoReset = false;
+                updateTimer.Stop();
+                State = stateType.IDLE;
+                Chronometer.instance.UpdateTray();
+            }
+
+            public void TogglePause()
+            {
+                if (State == stateType.RUNNING)
+                {
+                    timer.AutoReset = false;
+                    timer.Stop();
+                    updateTimer.AutoReset = false;
+                    updateTimer.Stop();
+                    pauseRemainingMilliseconds = (DateTime.Now - targetTime).Milliseconds;
+                    State = stateType.PAUSED;
+                }
+                else if (State == stateType.PAUSED)
+                {
+                    AddMilliseconds(pauseRemainingMilliseconds);
+                }
+                Chronometer.instance.UpdateTray();
+            }
         }
 
         [STAThread]
@@ -111,7 +156,7 @@ namespace TrayTimer
             Application.SetCompatibleTextRenderingDefault(false);
 
             Chronometer.Instance.notifyIcon = new NotifyIcon();
-            Chronometer.Instance.UpdateNotification();
+            Chronometer.Instance.UpdateTray();
 
             Application.Run();
         }
@@ -121,13 +166,14 @@ namespace TrayTimer
             int minutes = 0;
             if (Int32.TryParse(sender.ToString().Split(' ')[0], out minutes))
             {
-                Chronometer.Instance.AddToTimer(minutes);
+                Chronometer.Instance.AddMinutes(minutes);
             }
         }
 
-        private static void Exit_Click(object sender, EventArgs e)
-        {
-            Application.Exit();
-        }
+        private static void Stop_Click(object sender, EventArgs e) => Chronometer.Instance.Stop();
+
+        private static void Pause_Click(object sender, EventArgs e) => Chronometer.Instance.TogglePause();
+
+        private static void Exit_Click(object sender, EventArgs e) => Application.Exit();
     }
 }
