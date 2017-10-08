@@ -57,7 +57,7 @@ namespace TrayTimer
                 System.Windows.Forms.MessageBox.Show("Time's up!", "TrayTimer");
             }
 
-            public string GetTimeRemaining() => Math.Truncate((DateTime.Now - targetTime).TotalMinutes * -1).ToString();
+            public int GetTimeRemaining() => Convert.ToInt32(Math.Truncate((DateTime.Now - targetTime).TotalMinutes * -1));
 
             public string GetStateName()
             {
@@ -98,8 +98,15 @@ namespace TrayTimer
 
             public void UpdateTray()
             {
+                string iconfile = "icon-small.ico";
                 notifyIcon.ContextMenuStrip = GetContext();
-                notifyIcon.Icon = new System.Drawing.Icon("1.ico");
+                if (State == stateType.RUNNING)
+                {
+                    iconfile = (GetTimeRemaining() < 60 ? GetTimeRemaining().ToString() : "more") + ".ico";
+                }
+                else if (State == stateType.PAUSED)
+                    iconfile = "paused.ico";
+                notifyIcon.Icon = new System.Drawing.Icon(iconfile);
                 notifyIcon.Text = "Tray Timer ("+ GetStateName() + ")";
                 notifyIcon.Visible = true;
             }
@@ -109,8 +116,7 @@ namespace TrayTimer
                 get
                 {
                     if (instance == null)
-                    {
-                        lock (syncRoot)
+                    {                    lock (syncRoot)
                         {
                             if (instance == null)
                                 instance = new Chronometer();
