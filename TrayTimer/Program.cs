@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -13,7 +13,7 @@ namespace TrayTimer
         {
             private static volatile Chronometer instance;
             private static object syncRoot = new Object();
-            enum stateType { IDLE, RUNNING, PAUSED };
+            enum StateType { IDLE, RUNNING, PAUSED };
 
             private System.Timers.Timer timer;
             private System.Timers.Timer updateTimer;
@@ -21,19 +21,20 @@ namespace TrayTimer
             private DateTime targetTime = DateTime.Now;
             public NotifyIcon notifyIcon;
 
-            private stateType State { get; set; }
+            private StateType State { get; set; }
 
-            private int pauseRemainingMilliseconds;
+            private int PauseRemainingMilliseconds = 0;
 
-            public Chronometer() => State = stateType.IDLE;
+            public Chronometer() => State = StateType.IDLE;
 
             public void AddMilliseconds(int milliseconds)
             {
+                ClearTimers();
                 if (milliseconds <= 0) return;
                 timer = new System.Timers.Timer();
                 timer.Elapsed += new System.Timers.ElapsedEventHandler(Timer_Ended);
-                targetTime = DateTime.Now.AddMilliseconds(milliseconds);
-                timer.Interval = milliseconds;
+                targetTime = targetTime.AddMilliseconds(milliseconds);
+                timer.Interval = (DateTime.Now - targetTime).TotalMilliseconds * -1;
                 timer.AutoReset = false;
                 timer.Start();
 
@@ -43,7 +44,7 @@ namespace TrayTimer
                 updateTimer.AutoReset = true;
                 updateTimer.Start();
 
-                State = stateType.RUNNING;
+                State = StateType.RUNNING;
                 UpdateTray();
             }
 
@@ -62,10 +63,10 @@ namespace TrayTimer
             public string GetStateName()
             {
                 switch (State) {
-                    case stateType.RUNNING:
-                        return GetTimeRemaining() + " minutes remaining"; ;
-                    case stateType.PAUSED:
-                        return "[Paused] "+ GetTimeRemaining() + " minutes remaining";
+                    case StateType.RUNNING:
+                        return GetTimeRemaining()+1 + " minutes remaining"; ;
+                    case StateType.PAUSED:
+                        return "[Paused] " + GetTimeRemaining()+1 + " minutes remaining";
                 }
                 return "Idle";
             }
@@ -75,13 +76,13 @@ namespace TrayTimer
                 ContextMenuStrip CMS = new ContextMenuStrip();
                 CMS.Items.Add(new ToolStripLabel(GetStateName()));
                 CMS.Items.Add(new ToolStripSeparator());
-                if (State == stateType.IDLE)
+                if (State == StateType.IDLE)
                 {
                     CMS.Items.Add("25 minutes", null, new EventHandler(Timer_Click));
                     CMS.Items.Add("15 minutes", null, new EventHandler(Timer_Click));
                     CMS.Items.Add("5 minutes", null, new EventHandler(Timer_Click));
                 }
-                else if (State == stateType.RUNNING)
+                else if (State == StateType.RUNNING)
                 {
                     CMS.Items.Add("Stop", null, new EventHandler(Stop_Click));
                     CMS.Items.Add("Pause", null, new EventHandler(Pause_Click));
@@ -89,7 +90,7 @@ namespace TrayTimer
                 }
                 else // pause
                 {
-                    CMS.Items.Add("Resume", null, new EventHandler(Pause_Click));
+                    CMS.Items.Add("Resume", null, new EventHandler(Resume_Click));
                 }
                 CMS.Items.Add(new ToolStripSeparator());
                 CMS.Items.Add("Exit", null, new EventHandler(Exit_Click));
@@ -100,14 +101,14 @@ namespace TrayTimer
             {
                 string iconfile = "icon-small.ico";
                 notifyIcon.ContextMenuStrip = GetContext();
-                if (State == stateType.RUNNING)
+                if (State == StateType.RUNNING)
                 {
-                    iconfile = (GetTimeRemaining() < 60 ? GetTimeRemaining().ToString() : "more") + ".ico";
+                    iconfile = (GetTimeRemaining() < 60 ? (GetTimeRemaining()+1).ToString() : "more") + ".ico";
                 }
-                else if (State == stateType.PAUSED)
+                else if (State == StateType.PAUSED)
                     iconfile = "paused.ico";
                 notifyIcon.Icon = new System.Drawing.Icon(iconfile);
-                notifyIcon.Text = "Tray Timer ("+ GetStateName() + ")";
+                notifyIcon.Text = "Tray Timer (" + GetStateName() + ")";
                 notifyIcon.Visible = true;
             }
 
@@ -116,7 +117,7 @@ namespace TrayTimer
                 get
                 {
                     if (instance == null)
-                    {                    lock (syncRoot)
+                    { lock (syncRoot)
                         {
                             if (instance == null)
                                 instance = new Chronometer();
@@ -126,31 +127,38 @@ namespace TrayTimer
                 }
             }
 
-            public void Stop()
+            public void ClearTimers()
             {
-                timer.AutoReset = false;
-                timer.Stop();
-                updateTimer.AutoReset = false;
-                updateTimer.Stop();
-                State = stateType.IDLE;
-                Chronometer.instance.UpdateTray();
-            }
-
-            public void TogglePause()
-            {
-                if (State == stateType.RUNNING)
+                if (timer != null)
                 {
                     timer.AutoReset = false;
                     timer.Stop();
+                }
+                if (updateTimer != null)
+                {
                     updateTimer.AutoReset = false;
                     updateTimer.Stop();
-                    pauseRemainingMilliseconds = (DateTime.Now - targetTime).Milliseconds;
-                    State = stateType.PAUSED;
                 }
-                else if (State == stateType.PAUSED)
-                {
-                    AddMilliseconds(pauseRemainingMilliseconds);
-                }
+            }
+
+            public void Stop()
+            {
+                ClearTimers();
+                State = StateType.IDLE;
+                Chronometer.instance.UpdateTray();
+            }
+
+            public void Pause()
+            {
+                PauseRemainingMilliseconds = (DateTime.Now - targetTime).Milliseconds * -1;
+                ClearTimers();
+                State = StateType.PAUSED;
+                Chronometer.instance.UpdateTray();
+            }
+
+            public void Resume()
+            {
+                AddMilliseconds(PauseRemainingMilliseconds);
                 Chronometer.instance.UpdateTray();
             }
         }
@@ -178,7 +186,9 @@ namespace TrayTimer
 
         private static void Stop_Click(object sender, EventArgs e) => Chronometer.Instance.Stop();
 
-        private static void Pause_Click(object sender, EventArgs e) => Chronometer.Instance.TogglePause();
+        private static void Pause_Click(object sender, EventArgs e) => Chronometer.Instance.Pause();
+
+        private static void Resume_Click(object sender, EventArgs e) => Chronometer.Instance.Resume();
 
         private static void Exit_Click(object sender, EventArgs e) => Application.Exit();
     }
